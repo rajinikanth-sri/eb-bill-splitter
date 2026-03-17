@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="EB Splitter" />
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#1e1e1e" media="(prefers-color-scheme: dark)" />
+  <meta name="description" content="Split electricity bills among tenants using sub-meter readings" />
+  <link rel="manifest" href="manifest.json" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <link rel="stylesheet" href="style.css" />
+  <title>EB Bill Splitter</title>
+</head>
+<body>
+<div class="app-shell">
+
+  <!-- Top bar -->
+  <div class="topbar">
+    <div class="topbar-inner">
+      <div>
+        <div class="topbar h1">⚡ EB Bill Splitter</div>
+        <div class="subtitle">Multi-meter · Sub-meter billing</div>
+      </div>
+      <span class="cycle-badge" id="cycle-badge">Monthly</span>
+    </div>
+  </div>
+
+  <!-- Scrollable content -->
+  <div class="scroll-body">
+
+    <!-- CALCULATE PANEL -->
+    <div class="panel active" id="panel-calculate">
+
+      <div id="autofill-banner" class="success-banner" style="display:none;margin:12px 12px 0;">
+        <span id="autofill-text" style="font-size:13px;"></span>
+        <button class="btn btn-sm" onclick="clearAutofill()" style="flex-shrink:0;">Clear</button>
+      </div>
+
+      <div style="padding:12px 12px 0;">
+        <div class="card">
+          <div class="section-label">Billing period</div>
+          <div class="form-row-2">
+            <div class="form-group"><label>Period label</label><input type="text" id="period-label" placeholder="e.g. JAN 2026" /></div>
+            <div class="form-group"><label>Reading date</label><input type="date" id="reading-date" /></div>
+          </div>
+        </div>
+      </div>
+
+      <div style="padding:0 12px;" id="calc-meters"></div>
+
+      <div style="padding:0 12px 12px;">
+        <div class="btn-row">
+          <button class="btn btn-primary" style="flex:1;" onclick="calculateAll()">⚡ Calculate split</button>
+          <button class="btn" onclick="clearForm()">Clear</button>
+        </div>
+      </div>
+
+      <div id="result-section" style="display:none;padding:0 12px 12px;">
+        <div class="section-label" style="margin-bottom:8px;">Results</div>
+        <div id="result-content"></div>
+        <div class="btn-row" style="margin-top:8px;">
+          <button class="btn btn-green" style="flex:1;" onclick="saveToHistory()" id="save-btn">Save to history</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- HISTORY PANEL -->
+    <div class="panel" id="panel-history">
+      <div style="padding:12px 12px 0;">
+        <div class="card">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+            <div class="section-label" style="margin-bottom:0;">Saved records</div>
+            <div style="display:flex;gap:6px;">
+              <button class="btn btn-excel btn-sm" onclick="exportExcel()">
+                <svg class="excel-icon" viewBox="0 0 24 24"><path d="M21.17 3.25Q21.5 3.25 21.76 3.5 22 3.74 22 4.08V19.92Q22 20.26 21.76 20.5 21.5 20.75 21.17 20.75H7.83Q7.5 20.75 7.24 20.5 7 20.26 7 19.92V17H2.83Q2.5 17 2.24 16.76 2 16.5 2 16.17V7.83Q2 7.5 2.24 7.24 2.5 7 2.83 7H7V4.08Q7 3.74 7.24 3.5 7.5 3.25 7.83 3.25M7 13.06L8.18 15.28H9.97L8 12.06 9.93 8.89H8.18L7 11.13 5.8 8.89H4.05L6 12.06 4.05 15.28H5.8M13.88 19.5V17H9.5V19.5M13.88 15.75V12.63H9.5V15.75M13.88 11.38V8.25H9.5V11.38M20.5 19.5V17H15.13V19.5M20.5 15.75V12.63H15.13V15.75M20.5 11.38V8.25H15.13V11.38Z"/></svg>
+                Excel
+              </button>
+              <button class="btn btn-danger btn-sm" onclick="clearHistory()">Clear</button>
+            </div>
+          </div>
+          <div id="history-list"></div>
+        </div>
+        <div id="history-detail" style="display:none;"></div>
+      </div>
+    </div>
+
+    <!-- SETTINGS PANEL -->
+    <div class="panel" id="panel-settings">
+      <div style="padding:12px 12px 0;">
+
+        <!-- Install tip for iPhone -->
+        <div class="install-tip">
+          <strong>📱 Add to iPhone Home Screen</strong>
+          Tap the <b>Share</b> button in Safari → <b>"Add to Home Screen"</b> → the app will work offline like a native app!
+        </div>
+
+        <div class="card">
+          <div class="section-label">Billing configuration</div>
+          <div class="form-group"><label>Billing cycle</label>
+            <select id="set-cycle"><option value="monthly">Monthly</option><option value="bimonthly">Bi-monthly</option></select>
+          </div>
+        </div>
+
+        <div class="card">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+            <div class="section-label" style="margin-bottom:0;">Tenants</div>
+            <button class="btn btn-sm" onclick="addTenant()">+ Add</button>
+          </div>
+          <div id="tenant-list"></div>
+        </div>
+
+        <div class="card">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+            <div class="section-label" style="margin-bottom:0;">Main meters</div>
+            <button class="btn btn-sm" onclick="addMeter()">+ Add meter</button>
+          </div>
+          <div class="info-box" style="margin-bottom:10px;">Tap tenant names to link/unlink them to each meter.</div>
+          <div id="meter-list"></div>
+        </div>
+
+        <div class="card">
+          <div class="section-label">Split rules</div>
+          <div style="font-size:13px;color:var(--text2);line-height:2;">
+            ⚡ Energy — proportional by sub-meter usage<br>
+            🧾 Tax — proportional by sub-meter usage<br>
+            🔧 Fixed — split equally among linked tenants<br>
+            🏢 Common area — split equally among linked tenants
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="section-label">WhatsApp message template</div>
+          <p style="font-size:12px;color:var(--text3);margin-bottom:8px;">
+            Use: <code>{name}</code> <code>{meter}</code> <code>{period}</code> <code>{prev}</code> <code>{curr}</code> <code>{usage}</code> <code>{rate}</code> <code>{total_energy_amt}</code> <code>{energy_amt}</code> <code>{fixed_total}</code> <code>{fixed_amt}</code> <code>{common_amt}</code> <code>{tax_amt}</code> <code>{total}</code> <code>{num_splits}</code>
+          </p>
+          <div class="form-group"><textarea id="set-msg-template" rows="10"></textarea></div>
+          <div style="font-size:12px;color:var(--text3);margin-bottom:4px;">Preview:</div>
+          <div id="msg-preview" class="msg-preview"></div>
+        </div>
+
+        <button class="btn btn-primary btn-full" onclick="applySettings()" style="margin-bottom:10px;">Save settings</button>
+
+        <div class="card">
+          <div class="section-label">Data management</div>
+          <div class="btn-row">
+            <button class="btn btn-excel" onclick="exportExcel()">
+              <svg class="excel-icon" viewBox="0 0 24 24"><path d="M21.17 3.25Q21.5 3.25 21.76 3.5 22 3.74 22 4.08V19.92Q22 20.26 21.76 20.5 21.5 20.75 21.17 20.75H7.83Q7.5 20.75 7.24 20.5 7 20.26 7 19.92V17H2.83Q2.5 17 2.24 16.76 2 16.5 2 16.17V7.83Q2 7.5 2.24 7.24 2.5 7 2.83 7H7V4.08Q7 3.74 7.24 3.5 7.5 3.25 7.83 3.25M7 13.06L8.18 15.28H9.97L8 12.06 9.93 8.89H8.18L7 11.13 5.8 8.89H4.05L6 12.06 4.05 15.28H5.8M13.88 19.5V17H9.5V19.5M13.88 15.75V12.63H9.5V15.75M13.88 11.38V8.25H9.5V11.38M20.5 19.5V17H15.13V19.5M20.5 15.75V12.63H15.13V15.75M20.5 11.38V8.25H15.13V11.38Z"/></svg>
+              Export Excel
+            </button>
+            <button class="btn" onclick="exportJSON()">Backup JSON</button>
+            <button class="btn btn-danger" onclick="clearHistory()">Clear history</button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+  </div><!-- end scroll-body -->
+
+  <!-- Bottom tab bar -->
+  <div class="tab-bar">
+    <button class="tab-item active" data-tab="calculate" onclick="switchTab('calculate')">
+      <span class="tab-icon">⚡</span>Calculate
+    </button>
+    <button class="tab-item" data-tab="history" onclick="switchTab('history')">
+      <span class="tab-icon">📋</span>History
+    </button>
+    <button class="tab-item" data-tab="settings" onclick="switchTab('settings')">
+      <span class="tab-icon">⚙️</span>Settings
+    </button>
+  </div>
+
+</div><!-- end app-shell -->
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
