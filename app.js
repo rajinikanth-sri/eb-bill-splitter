@@ -316,10 +316,20 @@ function renderTenants(){
         <span style="font-weight:600;font-size:14px;">Tenant ${i+1}</span>
         <button class="btn btn-danger btn-sm" onclick="removeTenant('${t.id}')">Remove</button>
       </div>
-      <div class="form-group"><label>Name</label><input type="text" class="t-name" data-id="${t.id}" value="${t.name}" /></div>
-      <div class="form-group" style="margin-bottom:0;"><label>WhatsApp number</label><input type="tel" class="t-phone" data-id="${t.id}" inputmode="numeric" placeholder="919876543210" value="${t.phone||''}" /></div>
+      <div class="form-group"><label>Name</label><input type="text" class="t-name" data-id="${t.id}" value="${t.name}" oninput="onTenantNameInput('${t.id}', this.value)" /></div>
+      <div class="form-group" style="margin-bottom:0;"><label>WhatsApp number</label><input type="tel" class="t-phone" data-id="${t.id}" inputmode="numeric" placeholder="919876543210" value="${t.phone||''}" oninput="onTenantPhoneInput('${t.id}', this.value)" /></div>
     </div>`).join('');
   document.getElementById('tenant-list').innerHTML=html;
+}
+
+function onTenantNameInput(tenantId, value){
+  const t = state.settings.tenants.find(x => x.id === tenantId);
+  if(t) t.name = value;
+}
+
+function onTenantPhoneInput(tenantId, value){
+  const t = state.settings.tenants.find(x => x.id === tenantId);
+  if(t) t.phone = value.trim();
 }
 
 function addTenant(){
@@ -334,12 +344,14 @@ function removeTenant(id){
 }
 
 function addMeter(){
+  syncMeterNamesFromDOM();
   state.settings.mainMeters.push({id:uid(),name:'Meter '+(state.settings.mainMeters.length+1),tenantIds:[]});
   renderMetersSettings();
 }
 
 function removeMeter(id){
   if(state.settings.mainMeters.length<=1){ alert('At least one meter required.'); return; }
+  syncMeterNamesFromDOM();
   state.settings.mainMeters=state.settings.mainMeters.filter(m=>m.id!==id);
   renderMetersSettings();
 }
@@ -353,7 +365,7 @@ function renderMetersSettings(){
         <span class="meter-badge">Meter ${mi+1}</span>
         <button class="btn btn-danger btn-sm" onclick="removeMeter('${m.id}')">Remove</button>
       </div>
-      <div class="form-group"><label>Meter name</label><input type="text" class="m-name" data-id="${m.id}" value="${m.name}" /></div>
+      <div class="form-group"><label>Meter name</label><input type="text" class="m-name" data-id="${m.id}" value="${m.name}" oninput="onMeterNameInput('${m.id}', this.value)" /></div>
       <div><label style="font-size:13px;color:var(--text2);display:block;margin-bottom:6px;">Linked tenants</label>
         <div>${chips||'<span style="font-size:13px;color:var(--text3);">Add tenants above first</span>'}</div>
       </div>
@@ -362,7 +374,13 @@ function renderMetersSettings(){
   document.getElementById('meter-list').innerHTML=html;
 }
 
+function onMeterNameInput(meterId, value){
+  const m = state.settings.mainMeters.find(x => x.id === meterId);
+  if(m) m.name = value;
+}
+
 function toggleTenant(meterId,tenantId){
+  syncMeterNamesFromDOM();
   const m=state.settings.mainMeters.find(x=>x.id===meterId); if(!m) return;
   if(m.tenantIds.includes(tenantId)) m.tenantIds=m.tenantIds.filter(x=>x!==tenantId);
   else m.tenantIds.push(tenantId);
@@ -370,12 +388,27 @@ function toggleTenant(meterId,tenantId){
 }
 
 function applySettings(){
-  state.settings.cycle=document.getElementById('set-cycle').value;
-  state.settings.msgTemplate=document.getElementById('set-msg-template').value||DEFAULT_TEMPLATE;
-  document.querySelectorAll('.t-name').forEach(el=>{ const t=state.settings.tenants.find(x=>x.id===el.dataset.id); if(t) t.name=el.value.trim()||t.name; });
-  document.querySelectorAll('.t-phone').forEach(el=>{ const t=state.settings.tenants.find(x=>x.id===el.dataset.id); if(t) t.phone=el.value.trim(); });
-  document.querySelectorAll('.m-name').forEach(el=>{ const m=state.settings.mainMeters.find(x=>x.id===el.dataset.id); if(m) m.name=el.value.trim()||m.name; });
-  document.getElementById('cycle-badge').textContent=state.settings.cycle==='monthly'?'Monthly':'Bi-monthly';
+  // Billing cycle & message template
+  state.settings.cycle = document.getElementById('set-cycle').value;
+  state.settings.msgTemplate = document.getElementById('set-msg-template').value || DEFAULT_TEMPLATE;
+
+  // Read tenant names and phones from DOM before saving
+  document.querySelectorAll('.t-name').forEach(el => {
+    const t = state.settings.tenants.find(x => x.id === el.dataset.id);
+    if(t) t.name = el.value.trim() || t.name;
+  });
+  document.querySelectorAll('.t-phone').forEach(el => {
+    const t = state.settings.tenants.find(x => x.id === el.dataset.id);
+    if(t) t.phone = el.value.trim();
+  });
+
+  // Read meter names from DOM before saving
+  document.querySelectorAll('.m-name').forEach(el => {
+    const m = state.settings.mainMeters.find(x => x.id === el.dataset.id);
+    if(m) m.name = el.value.trim() || m.name;
+  });
+
+  document.getElementById('cycle-badge').textContent = state.settings.cycle === 'monthly' ? 'Monthly' : 'Bi-monthly';
   saveSettings();
   renderCalcSections();
   alert('Settings saved!');
@@ -506,3 +539,11 @@ window.addEventListener('DOMContentLoaded',()=>{
     navigator.serviceWorker.register('/sw.js').catch(()=>{});
   }
 });
+
+// Patch: sync meter names from DOM before any re-render
+function syncMeterNamesFromDOM(){
+  document.querySelectorAll('.m-name').forEach(el => {
+    const m = state.settings.mainMeters.find(x => x.id === el.dataset.id);
+    if(m && el.value.trim()) m.name = el.value.trim();
+  });
+}
