@@ -2,12 +2,12 @@
 // IMPORTANT: Replace these values with your own Firebase project config
 // Get them from: https://console.firebase.google.com → Your project → Project settings → Your apps
 const FIREBASE_CONFIG = {
-  apiKey:            "YOUR_API_KEY",
-  authDomain:        "YOUR_PROJECT_ID.firebaseapp.com",
-  projectId:         "YOUR_PROJECT_ID",
-  storageBucket:     "YOUR_PROJECT_ID.appspot.com",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId:             "YOUR_APP_ID"
+  apiKey:            "AIzaSyCfcVsbDTv6kN8hR940O20Eei3syZhXpcc",
+  authDomain:        "eb-bill-splitter.firebaseapp.com",
+  projectId:         "eb-bill-splitter",
+  storageBucket:     "eb-bill-splitter.firebasestorage.app",
+  messagingSenderId: "983597766188",
+  appId:             "1:983597766188:web:16a8e66efdb525838aa389"
 };
 
 // ── App state ─────────────────────────────────────────────
