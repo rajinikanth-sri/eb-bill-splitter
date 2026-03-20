@@ -13,65 +13,88 @@
   <link rel="stylesheet" href="style.css"/>
   <title>EB Bill Splitter</title>
   <style>
-    .sync-bar{display:flex;align-items:center;justify-content:space-between;padding:5px 16px;background:var(--surface2);border-bottom:1px solid var(--border);font-size:11px;}
+    .sync-bar{display:flex;align-items:center;justify-content:space-between;padding:4px 14px;background:var(--surface2);border-bottom:1px solid var(--border);font-size:11px;}
     .sync-indicator{display:none;align-items:center;gap:5px;color:var(--accent-txt);}
     .sync-spinner{width:10px;height:10px;border:2px solid var(--accent-lt);border-top-color:var(--accent);border-radius:50%;animation:spin 0.7s linear infinite;}
     @keyframes spin{to{transform:rotate(360deg);}}
-    .user-id-bar{display:flex;align-items:center;gap:8px;}
-    .user-id-label{color:var(--text3);}
-    .user-id-val{font-family:'SF Mono',monospace;color:var(--text2);font-size:10px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-    .sync-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:12px;box-shadow:var(--shadow);}
-    .sync-card-title{font-size:13px;font-weight:700;margin-bottom:8px;display:flex;align-items:center;gap:7px;}
-    .sync-card-desc{font-size:12px;color:var(--text3);line-height:1.6;margin-bottom:12px;}
-    .uid-box{font-family:'SF Mono',monospace;font-size:12px;padding:10px 12px;background:var(--surface2);border:1px solid var(--border2);border-radius:var(--radius-sm);word-break:break-all;color:var(--text2);margin-bottom:10px;user-select:all;}
+    .uid-box{font-family:'SF Mono',Menlo,monospace;font-size:12px;padding:10px 12px;background:var(--surface2);border:1px solid var(--border2);border-radius:var(--radius-sm);word-break:break-all;color:var(--text2);margin-bottom:10px;user-select:all;}
+    .tenant-filter-bar{display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;margin-bottom:12px;-webkit-overflow-scrolling:touch;scrollbar-width:none;}
+    .tenant-filter-bar::-webkit-scrollbar{display:none;}
+    .filter-chip{padding:6px 14px;border-radius:99px;border:1.5px solid var(--border2);font-size:13px;font-weight:600;cursor:pointer;background:var(--surface);color:var(--text2);white-space:nowrap;font-family:inherit;}
+    .filter-chip.active{background:var(--accent-lt);border-color:var(--accent);color:var(--accent-txt);}
   </style>
 </head>
 <body>
 <div class="app-shell">
 
-  <!-- ── Top bar ─────────────────────────────────────────── -->
+  <!-- Topbar -->
   <div class="topbar">
     <div class="topbar-inner">
       <div class="topbar-logo">
         <div class="topbar-icon">⚡</div>
         <div>
-          <div class="topbar h1">EB Bill Splitter</div>
-          <div class="topbar-sub">Multi-meter · Sub-meter billing</div>
+          <div class="topbar-title">EB Bill Splitter</div>
+          <div class="topbar-sub">Property & billing management</div>
         </div>
       </div>
       <span class="cycle-pill" id="cycle-badge">Monthly</span>
     </div>
   </div>
 
-  <!-- ── Sync bar ─────────────────────────────────────────── -->
+  <!-- Sync bar -->
   <div class="sync-bar">
-    <div class="user-id-bar">
-      <span class="user-id-label">User ID:</span>
-      <span class="user-id-val" id="user-id-display">—</span>
+    <div style="display:flex;align-items:center;gap:6px;">
+      <span style="color:var(--text3);">ID:</span>
+      <span id="user-id-display" style="font-family:monospace;font-size:10px;color:var(--text2);max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">—</span>
     </div>
     <div style="display:flex;align-items:center;gap:10px;">
       <span id="sync-status" style="font-size:11px;color:var(--text3);">Connecting…</span>
       <div class="sync-indicator" id="sync-indicator">
-        <div class="sync-spinner"></div>
-        <span>Syncing</span>
+        <div class="sync-spinner"></div><span>Syncing</span>
       </div>
     </div>
   </div>
 
-  <!-- ── Scroll body ─────────────────────────────────────── -->
+  <!-- Scroll body -->
   <div class="scroll-body">
 
-    <!-- ════════ CALCULATE PANEL ════════ -->
-    <div class="panel active" id="panel-calculate">
+    <!-- ════════ DASHBOARD ════════ -->
+    <div class="panel active" id="panel-dashboard">
+      <div id="dashboard-content"></div>
+    </div>
+
+    <!-- ════════ BUILDINGS ════════ -->
+    <div class="panel" id="panel-buildings">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+        <div style="font-size:18px;font-weight:800;">Buildings</div>
+        <button class="btn btn-primary btn-sm" onclick="openAddBuildingModal()">+ Add building</button>
+      </div>
+      <div id="buildings-content"></div>
+    </div>
+
+    <!-- ════════ TENANTS ════════ -->
+    <div class="panel" id="panel-tenants">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+        <div style="font-size:18px;font-weight:800;">Tenants</div>
+        <button class="btn btn-primary btn-sm" onclick="openAddTenantModal()">+ Add tenant</button>
+      </div>
+      <div class="tenant-filter-bar">
+        <button class="filter-chip active" onclick="setTenantFilter('all',this)">All</button>
+        <button class="filter-chip" onclick="setTenantFilter('active',this)">Active</button>
+        <button class="filter-chip" onclick="setTenantFilter('inactive',this)">Inactive</button>
+        <button class="filter-chip" onclick="setTenantFilter('expiring',this)">Expiring soon</button>
+      </div>
+      <div id="tenants-content"></div>
+    </div>
+
+    <!-- ════════ CALCULATE ════════ -->
+    <div class="panel" id="panel-calculate">
 
       <div id="autofill-banner" class="banner banner-green" style="display:none;">
         <div class="banner-icon">✅</div>
         <div class="banner-body">
           <div class="banner-row">
-            <div>
-              <div class="banner-title">Previous readings loaded</div>
-              <div id="autofill-text" style="font-size:12px;margin-top:1px;"></div>
-            </div>
+            <div><div class="banner-title">Previous readings loaded</div><div id="autofill-text" style="font-size:12px;margin-top:1px;"></div></div>
             <button class="btn btn-sm btn-ghost" onclick="clearAutofill()">Clear</button>
           </div>
         </div>
@@ -88,20 +111,19 @@
       <div id="calc-meters"></div>
 
       <div class="btn-row" style="margin-bottom:14px;">
-        <button class="btn btn-primary" style="flex:1;" onclick="calculateAll()"><span>⚡</span> Calculate split</button>
+        <button class="btn btn-primary" style="flex:1;" onclick="calculateAll()">⚡ Calculate split</button>
         <button class="btn btn-ghost" onclick="clearForm()">Clear</button>
       </div>
 
       <div id="result-section" style="display:none;">
         <div id="result-content"></div>
         <div class="btn-row" style="margin-bottom:16px;">
-          <button class="btn btn-green" style="flex:1;" onclick="saveToHistory()" id="save-btn"><span>💾</span> Save to history</button>
+          <button class="btn btn-green" style="flex:1;" onclick="saveToHistory()" id="save-btn">💾 Save to history</button>
         </div>
       </div>
-
     </div>
 
-    <!-- ════════ HISTORY PANEL ════════ -->
+    <!-- ════════ HISTORY ════════ -->
     <div class="panel" id="panel-history">
       <div class="card">
         <div class="section-header">
@@ -111,7 +133,7 @@
               <svg width="14" height="14" viewBox="0 0 24 24" fill="#fff"><path d="M21.17 3.25Q21.5 3.25 21.76 3.5 22 3.74 22 4.08V19.92Q22 20.26 21.76 20.5 21.5 20.75 21.17 20.75H7.83Q7.5 20.75 7.24 20.5 7 20.26 7 19.92V17H2.83Q2.5 17 2.24 16.76 2 16.5 2 16.17V7.83Q2 7.5 2.24 7.24 2.5 7 2.83 7H7V4.08Q7 3.74 7.24 3.5 7.5 3.25 7.83 3.25M7 13.06L8.18 15.28H9.97L8 12.06 9.93 8.89H8.18L7 11.13 5.8 8.89H4.05L6 12.06 4.05 15.28H5.8M13.88 19.5V17H9.5V19.5M13.88 15.75V12.63H9.5V15.75M13.88 11.38V8.25H9.5V11.38M20.5 19.5V17H15.13V19.5M20.5 15.75V12.63H15.13V15.75M20.5 11.38V8.25H15.13V11.38Z"/></svg>
               Excel
             </button>
-            <button class="btn btn-danger btn-sm" onclick="clearHistory()">Clear all</button>
+            <button class="btn btn-danger btn-sm" onclick="clearHistory()">Clear</button>
           </div>
         </div>
         <div id="history-list"></div>
@@ -119,16 +141,16 @@
       <div id="history-detail" style="display:none;"></div>
     </div>
 
-    <!-- ════════ SETTINGS PANEL ════════ -->
+    <!-- ════════ SETTINGS ════════ -->
     <div class="panel" id="panel-settings">
 
-      <!-- Cloud sync card -->
+      <!-- Cloud sync -->
       <div class="sync-card">
-        <div class="sync-card-title">☁️ Cloud sync</div>
-        <div class="sync-card-desc">Your data is synced to the cloud using your unique User ID. Use this ID to access the same data on any device or browser.</div>
+        <div style="font-size:13px;font-weight:700;margin-bottom:8px;">☁️ Cloud sync</div>
+        <div style="font-size:12px;color:var(--text3);margin-bottom:10px;line-height:1.6;">Use your User ID to access data from any device or browser.</div>
         <div class="uid-box" id="uid-box-display">—</div>
         <div class="btn-row">
-          <button class="btn btn-sm" onclick="copyUserId()">📋 Copy ID</button>
+          <button class="btn btn-sm" onclick="navigator.clipboard.writeText(state.userId).then(()=>alert('✓ Copied!'))">📋 Copy ID</button>
           <button class="btn btn-sm btn-ghost" onclick="promptSwitchUser()">🔄 Switch user</button>
         </div>
       </div>
@@ -146,29 +168,19 @@
       <!-- Billing config -->
       <div class="card">
         <div class="section-label">Billing configuration</div>
-        <div class="form-group">
-          <label>Billing cycle</label>
+        <div class="form-group"><label>Billing cycle</label>
           <select id="set-cycle"><option value="monthly">Monthly</option><option value="bimonthly">Bi-monthly</option></select>
         </div>
       </div>
 
-      <!-- Tenants -->
-      <div class="card">
-        <div class="section-header">
-          <div class="section-label" style="margin-bottom:0;">Tenants</div>
-          <button class="btn btn-sm btn-ghost" onclick="addTenant()">+ Add tenant</button>
-        </div>
-        <div id="tenant-list"></div>
-      </div>
-
-      <!-- Main meters -->
+      <!-- Meters -->
       <div class="card">
         <div class="section-header">
           <div class="section-label" style="margin-bottom:0;">Main meters</div>
-          <button class="btn btn-sm btn-ghost" onclick="addMeter()">+ Add meter</button>
+          <button class="btn btn-sm btn-ghost" onclick="addMeterToSettings()">+ Add meter</button>
         </div>
-        <div class="info-box" style="margin-bottom:12px;">Tap tenant names to link/unlink them to each meter.</div>
-        <div id="meter-list"></div>
+        <div class="info-box" style="margin-bottom:12px;">Tap tenant names to link/unlink them to each meter. Only active tenants appear here.</div>
+        <div id="meter-settings-list"></div>
       </div>
 
       <!-- Split rules -->
@@ -193,16 +205,13 @@
         <div id="msg-preview" class="msg-preview"></div>
       </div>
 
-      <button class="btn btn-primary btn-full" onclick="applySettings()" style="margin-bottom:12px;"><span>✓</span> Save settings</button>
+      <button class="btn btn-primary btn-full" onclick="applySettings()" style="margin-bottom:12px;">✓ Save settings</button>
 
       <!-- Data management -->
       <div class="card">
         <div class="section-label">Data management</div>
         <div class="btn-row">
-          <button class="btn btn-excel" onclick="exportExcel()">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="#fff"><path d="M21.17 3.25Q21.5 3.25 21.76 3.5 22 3.74 22 4.08V19.92Q22 20.26 21.76 20.5 21.5 20.75 21.17 20.75H7.83Q7.5 20.75 7.24 20.5 7 20.26 7 19.92V17H2.83Q2.5 17 2.24 16.76 2 16.5 2 16.17V7.83Q2 7.5 2.24 7.24 2.5 7 2.83 7H7V4.08Q7 3.74 7.24 3.5 7.5 3.25 7.83 3.25M7 13.06L8.18 15.28H9.97L8 12.06 9.93 8.89H8.18L7 11.13 5.8 8.89H4.05L6 12.06 4.05 15.28H5.8M13.88 19.5V17H9.5V19.5M13.88 15.75V12.63H9.5V15.75M13.88 11.38V8.25H9.5V11.38M20.5 19.5V17H15.13V19.5M20.5 15.75V12.63H15.13V15.75M20.5 11.38V8.25H15.13V11.38Z"/></svg>
-            Export Excel
-          </button>
+          <button class="btn btn-excel" onclick="exportExcel()">📊 Export Excel</button>
           <button class="btn btn-ghost" onclick="exportJSON()">Backup JSON</button>
           <button class="btn btn-danger" onclick="clearHistory()">Clear history</button>
         </div>
@@ -210,41 +219,44 @@
 
     </div>
 
-  </div>
+  </div><!-- /scroll-body -->
 
-  <!-- ── Bottom tab bar ──────────────────────────────────── -->
+  <!-- Bottom tab bar — 5 tabs -->
   <div class="tab-bar">
-    <button class="tab-item active" data-tab="calculate" onclick="switchTab('calculate')">
+    <button class="tab-item active" data-tab="dashboard" onclick="switchTab('dashboard')">
+      <span class="tab-icon">🏠</span>Dashboard
+    </button>
+    <button class="tab-item" data-tab="buildings" onclick="switchTab('buildings')">
+      <span class="tab-icon">🏢</span>Buildings
+    </button>
+    <button class="tab-item" data-tab="tenants" onclick="switchTab('tenants')">
+      <span class="tab-icon">👥</span>Tenants
+    </button>
+    <button class="tab-item" data-tab="calculate" onclick="switchTab('calculate')">
       <span class="tab-icon">⚡</span>Calculate
     </button>
     <button class="tab-item" data-tab="history" onclick="switchTab('history')">
       <span class="tab-icon">📋</span>History
     </button>
-    <button class="tab-item" data-tab="settings" onclick="switchTab('settings')">
-      <span class="tab-icon">⚙️</span>Settings
-    </button>
   </div>
 
 </div>
 
-<!-- Firebase v8 compat SDK (works without bundler) -->
+<!-- Firebase -->
 <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
 <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+<!-- SheetJS -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<!-- App -->
 <script src="app.js"></script>
 <script>
-// Extra helpers that need DOM
-function copyUserId(){
-  navigator.clipboard.writeText(state.userId).then(()=>alert('✓ User ID copied!')).catch(()=>alert('User ID: '+state.userId));
+function setTenantFilter(filter, el){
+  document.querySelectorAll('.filter-chip').forEach(c=>c.classList.remove('active'));
+  el.classList.add('active');
+  const inp=document.getElementById('tenant-filter');
+  if(inp) inp.value=filter; else { const h=document.createElement('input');h.id='tenant-filter';h.type='hidden';h.value=filter;document.body.appendChild(h); }
+  renderTenantList();
 }
-// Populate uid boxes when settings tab is shown
-const _origRenderSettings = renderSettings;
-renderSettings = function(){
-  _origRenderSettings();
-  const uid = state.userId || '—';
-  const el1 = document.getElementById('user-id-display'); if(el1) el1.textContent = uid;
-  const el2 = document.getElementById('uid-box-display'); if(el2) el2.textContent = uid;
-};
 </script>
 </body>
 </html>
