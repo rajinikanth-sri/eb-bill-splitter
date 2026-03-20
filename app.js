@@ -1,11 +1,11 @@
 // ── Firebase config ───────────────────────────────────────
 const FIREBASE_CONFIG = {
-  apiKey:            "AIzaSyCfcVsbDTv6kN8hR940O20Eei3syZhXpcc",
-  authDomain:        "eb-bill-splitter.firebaseapp.com",
-  projectId:         "eb-bill-splitter",
-  storageBucket:     "eb-bill-splitter.firebasestorage.app",
-  messagingSenderId: "983597766188",
-  appId:             "1:983597766188:web:16a8e66efdb525838aa389"
+  apiKey:            "YOUR_API_KEY",
+  authDomain:        "YOUR_PROJECT_ID.firebaseapp.com",
+  projectId:         "YOUR_PROJECT_ID",
+  storageBucket:     "YOUR_PROJECT_ID.appspot.com",
+  messagingSenderId: "YOUR_SENDER_ID",
+  appId:             "YOUR_APP_ID"
 };
 
 const DEFAULT_TEMPLATE =
@@ -836,26 +836,39 @@ function exportJSON(){
 
 // ── MODAL SYSTEM ──────────────────────────────────────────
 let currentModal=null;
-function showModal(id,title,bodyHtml,buttons){
+// Global action registry — avoids function.toString() which breaks closures
+window._ma = {};
+
+function showModal(id, title, bodyHtml, buttons){
   closeModal();
-  const overlay=document.createElement('div');
-  overlay.className='modal-overlay'; overlay.id='modal-overlay';
-  overlay.innerHTML=`<div class="modal" id="${id}">
-    <div class="modal-header">
-      <div class="modal-title">${title}</div>
-      <button class="modal-close" onclick="closeModal()">✕</button>
-    </div>
-    <div class="modal-body">${bodyHtml}</div>
-    <div class="modal-footer">${buttons.map(b=>`<button class="btn ${b.cls}" style="flex:1;" onclick="(${b.action.toString()})()">${b.label}</button>`).join('')}</div>
-  </div>`;
-  overlay.addEventListener('click',e=>{if(e.target===overlay)closeModal();});
+  const btnHtml = buttons.map((b, i) => {
+    const key = '_mb_' + i;
+    window._ma[key] = b.action;
+    return '<button class="btn ' + b.cls + '" style="flex:1;" onclick="window._ma[\"' + key + '\"]()">'+ b.label + '</button>';
+  }).join('');
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'modal-overlay';
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.id = id;
+  modal.innerHTML =
+    '<div class="modal-header">' +
+      '<div class="modal-title">' + title + '</div>' +
+      '<button class="modal-close" onclick="closeModal()">✕</button>' +
+    '</div>' +
+    '<div class="modal-body">' + bodyHtml + '</div>' +
+    '<div class="modal-footer">' + btnHtml + '</div>';
+  overlay.appendChild(modal);
+  overlay.addEventListener('click', e => { if(e.target === overlay) closeModal(); });
   document.body.appendChild(overlay);
-  currentModal=overlay;
-  // prevent body scroll
-  document.body.style.overflow='hidden';
+  currentModal = overlay;
+  document.body.style.overflow = 'hidden';
 }
+
 function closeModal(){
-  if(currentModal){currentModal.remove();currentModal=null;document.body.style.overflow='';}
+  if(currentModal){ currentModal.remove(); currentModal = null; document.body.style.overflow = ''; }
+  Object.keys(window._ma).forEach(k => delete window._ma[k]);
 }
 
 // ── SYNC UI HELPERS ───────────────────────────────────────
