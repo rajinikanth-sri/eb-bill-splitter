@@ -1,3 +1,16 @@
+// ── Firebase config ───────────────────────────────────────
+// IMPORTANT: Replace these values with your own Firebase project config
+// Get them from: https://console.firebase.google.com → Your project → Project settings → Your apps
+const FIREBASE_CONFIG = {
+  apiKey:            "YOUR_API_KEY",
+  authDomain:        "YOUR_PROJECT_ID.firebaseapp.com",
+  projectId:         "YOUR_PROJECT_ID",
+  storageBucket:     "YOUR_PROJECT_ID.appspot.com",
+  messagingSenderId: "YOUR_SENDER_ID",
+  appId:             "YOUR_APP_ID"
+};
+
+// ── App state ─────────────────────────────────────────────
 const DEFAULT_TEMPLATE =
 `*EB Bill {period} — {meter}:*
 ===================
@@ -11,6 +24,7 @@ Tax: {tax_amt}
 *Total: ₹{total}*`;
 
 let state = {
+  userId: null,
   settings: {
     cycle: 'monthly',
     msgTemplate: DEFAULT_TEMPLATE,
@@ -25,85 +39,196 @@ let state = {
   },
   history: [],
   lastResult: null,
-  activeTab: 'calculate'
+  db: null,
+  syncing: false
 };
 
 function uid(){ return 'id'+Date.now()+Math.random().toString(36).slice(2,5); }
+function userDocId(){ return 'user_'+state.userId; }
 
-// ── STORAGE ──────────────────────────────────────────────
-function saveSettings(){ localStorage.setItem('eb_settings', JSON.stringify(state.settings)); }
-function saveHistory(){ localStorage.setItem('eb_history', JSON.stringify(state.history)); }
-function loadState(){
+// ── Firebase init ─────────────────────────────────────────
+function initFirebase(){
+  try {
+    firebase.initializeApp(FIREBASE_CONFIG);
+    state.db = firebase.firestore();
+    console.log('Firebase connected');
+    return true;
+  } catch(e) {
+    console.warn('Firebase init failed:', e);
+    return false;
+  }
+}
+
+// ── User identity ─────────────────────────────────────────
+// Each device gets a unique user ID stored in localStorage
+// Share this ID to access the same data on another device
+function getOrCreateUserId(){
+  let id = localStorage.getItem('eb_user_id');
+  if(!id){
+    id = 'usr_' + Date.now().toString(36) + Math.random().toString(36).slice(2,8);
+    localStorage.setItem('eb_user_id', id);
+  }
+  return id;
+}
+
+function showUserId(){
+  const id = state.userId;
+  const msg = `Your User ID:\n\n${id}\n\nShare this ID to access your data on another device.\nOn the other device: Settings → Enter User ID → Load data.`;
+  alert(msg);
+}
+
+function promptSwitchUser(){
+  const newId = prompt('Enter User ID to load data from another device:\n(Leave blank to cancel)');
+  if(!newId || !newId.trim()) return;
+  const cleaned = newId.trim();
+  if(cleaned === state.userId){ alert('That is already your current ID.'); return; }
+  if(confirm(`Switch to User ID:\n${cleaned}\n\nThis will load that user's data. Continue?`)){
+    localStorage.setItem('eb_user_id', cleaned);
+    state.userId = cleaned;
+    location.reload();
+  }
+}
+
+// ── Cloud storage ─────────────────────────────────────────
+async function cloudSaveSettings(){
+  if(!state.db){ localSaveSettings(); return; }
+  setSyncIndicator(true);
+  try {
+    await state.db.collection('users').doc(userDocId()).set({
+      settings: state.settings,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+  } catch(e) {
+    console.error('Save settings failed:', e);
+    localSaveSettings(); // fallback
+  } finally { setSyncIndicator(false); }
+}
+
+async function cloudSaveHistory(){
+  if(!state.db){ localSaveHistory(); return; }
+  setSyncIndicator(true);
+  try {
+    await state.db.collection('users').doc(userDocId()).set({
+      history: state.history,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+  } catch(e) {
+    console.error('Save history failed:', e);
+    localSaveHistory();
+  } finally { setSyncIndicator(false); }
+}
+
+async function cloudLoadState(){
+  // Always load local fallback first for instant render
+  localLoadState();
+
+  if(!state.db) return;
+  setSyncIndicator(true);
+  try {
+    const doc = await state.db.collection('users').doc(userDocId()).get();
+    if(doc.exists){
+      const data = doc.data();
+      if(data.settings) state.settings = { ...state.settings, ...data.settings };
+      if(data.history)  state.history  = data.history;
+      // Also cache locally for offline
+      localSaveSettings();
+      localSaveHistory();
+    }
+  } catch(e) {
+    console.warn('Cloud load failed, using local cache:', e);
+  } finally { setSyncIndicator(false); }
+}
+
+// ── Local storage fallback ────────────────────────────────
+function localSaveSettings(){ localStorage.setItem('eb_settings', JSON.stringify(state.settings)); }
+function localSaveHistory(){  localStorage.setItem('eb_history',  JSON.stringify(state.history));  }
+function localLoadState(){
   try{ const s=localStorage.getItem('eb_settings'); if(s) state.settings={...state.settings,...JSON.parse(s)}; }catch(e){}
-  try{ const h=localStorage.getItem('eb_history'); if(h) state.history=JSON.parse(h); }catch(e){}
+  try{ const h=localStorage.getItem('eb_history');  if(h) state.history=JSON.parse(h); }catch(e){}
 }
 
-// ── TABS ──────────────────────────────────────────────
+// Convenience aliases used throughout
+const saveSettings = cloudSaveSettings;
+const saveHistory  = cloudSaveHistory;
+
+// ── Sync indicator ────────────────────────────────────────
+function setSyncIndicator(on){
+  state.syncing = on;
+  const el = document.getElementById('sync-indicator');
+  if(el) el.style.display = on ? 'flex' : 'none';
+}
+
+// ── Tabs ──────────────────────────────────────────────────
 function switchTab(tab){
-  state.activeTab = tab;
-  document.querySelectorAll('.tab-item').forEach(el => el.classList.toggle('active', el.dataset.tab === tab));
-  document.querySelectorAll('.panel').forEach(el => el.classList.toggle('active', el.id === 'panel-'+tab));
-  if(tab === 'history') renderHistory();
-  if(tab === 'settings') renderSettings();
-  if(tab === 'calculate') { renderCalcSections(); applyAutofill(); }
-  document.querySelector('.scroll-body').scrollTop = 0;
+  document.querySelectorAll('.tab-item').forEach(el=>el.classList.toggle('active',el.dataset.tab===tab));
+  document.querySelectorAll('.panel').forEach(el=>el.classList.toggle('active',el.id==='panel-'+tab));
+  if(tab==='history')  renderHistory();
+  if(tab==='settings') renderSettings();
+  if(tab==='calculate'){ renderCalcSections(); setTimeout(applyAutofill,80); }
+  document.querySelector('.scroll-body').scrollTop=0;
 }
 
-// ── CALCULATE ────────────────────────────────────────────
+// ── Calculate: render meter input sections ────────────────
 function renderCalcSections(){
-  let html = '';
-  state.settings.mainMeters.forEach((m, mi) => {
-    const linked = state.settings.tenants.filter(t => m.tenantIds.includes(t.id));
-    const n = linked.length;
-    html += `
-    <div class="card card-accent">
+  let html='';
+  state.settings.mainMeters.forEach((m,mi)=>{
+    const linked=state.settings.tenants.filter(t=>m.tenantIds.includes(t.id));
+    const n=linked.length;
+    const subRows = n>0 ? linked.map((t,ti)=>`
+      <div class="submeter-item">
+        <div class="submeter-name"><div class="submeter-dot"></div>${t.name}</div>
+        <div class="submeter-fields">
+          <div class="form-group" style="margin-bottom:0;">
+            <label>Previous (kWh)</label>
+            <input type="number" id="m${mi}_t${ti}_prev" inputmode="decimal" placeholder="0.00" min="0" step="0.01" oninput="updateSubUsage(${mi})"/>
+          </div>
+          <div class="form-group" style="margin-bottom:0;">
+            <label>Current (kWh)</label>
+            <input type="number" id="m${mi}_t${ti}_curr" inputmode="decimal" placeholder="0.00" min="0" step="0.01" oninput="updateSubUsage(${mi})"/>
+          </div>
+          <div class="form-group" style="margin-bottom:0;">
+            <label>Usage</label>
+            <div class="usage-chip" id="m${mi}_t${ti}_usage">— kWh</div>
+          </div>
+        </div>
+      </div>`).join('') : `<div class="info-box">No tenants linked. Go to Settings → Main meters.</div>`;
+
+    html+=`
+    <div class="card card-meter">
       <div class="meter-header">
-        <span class="meter-badge">Meter ${mi+1}</span>
-        <span style="font-size:15px;font-weight:600;">${m.name}</span>
-        <span style="font-size:12px;color:var(--text3);">${n} tenant${n!==1?'s':''}</span>
+        <span class="badge badge-blue">Meter ${mi+1}</span>
+        <span class="meter-title">${m.name}</span>
+        <span class="meter-sub">${n} tenant${n!==1?'s':''}</span>
       </div>
-
       <div class="form-row-3">
-        <div class="form-group"><label>Prev (kWh)</label><input type="number" id="m${mi}_prev" inputmode="decimal" placeholder="0.00" min="0" step="0.01" oninput="onMeterChange(${mi})" /></div>
-        <div class="form-group"><label>Curr (kWh)</label><input type="number" id="m${mi}_curr" inputmode="decimal" placeholder="0.00" min="0" step="0.01" oninput="onMeterChange(${mi})" /></div>
-        <div class="form-group"><label>Rate (₹)</label><input type="number" id="m${mi}_rate" inputmode="decimal" placeholder="0.00" min="0" step="0.01" oninput="onMeterChange(${mi})" /></div>
+        <div class="form-group"><label>Previous (kWh)</label><input type="number" id="m${mi}_prev" inputmode="decimal" placeholder="0.00" min="0" step="0.01" oninput="onMeterChange(${mi})"/></div>
+        <div class="form-group"><label>Current (kWh)</label><input type="number" id="m${mi}_curr" inputmode="decimal" placeholder="0.00" min="0" step="0.01" oninput="onMeterChange(${mi})"/></div>
+        <div class="form-group"><label>Rate (₹/kWh)</label><input type="number" id="m${mi}_rate" inputmode="decimal" placeholder="0.00" min="0" step="0.01" oninput="onMeterChange(${mi})"/></div>
       </div>
-
-      <div id="m${mi}_usage_line" style="display:none;padding:8px 10px;background:var(--surface2);border-radius:8px;font-size:13px;margin-bottom:10px;">
-        Usage: <b id="m${mi}_usage_val">—</b> kWh &nbsp;·&nbsp; Energy: <b id="m${mi}_auto_energy">₹—</b>
+      <div class="usage-line" id="m${mi}_usage_line">
+        <div class="usage-stat"><span class="usage-stat-label">Main usage</span><span class="usage-stat-val" id="m${mi}_usage_val">—</span></div>
+        <div class="usage-stat"><span class="usage-stat-label">Auto energy charge</span><span class="usage-stat-val" id="m${mi}_auto_energy">₹—</span></div>
       </div>
-
       <div class="form-row-2">
-        <div class="form-group"><label>Energy charge (₹)</label><input type="number" id="m${mi}_energy" inputmode="decimal" placeholder="0.00" min="0" step="0.01" oninput="syncMeter(${mi})" /></div>
-        <div class="form-group"><label>Fixed charge (₹)</label><input type="number" id="m${mi}_fixed" inputmode="decimal" placeholder="0.00" min="0" step="0.01" oninput="syncMeter(${mi})" /></div>
-        <div class="form-group"><label>Common area (₹)</label><input type="number" id="m${mi}_common" inputmode="decimal" placeholder="0.00" min="0" step="0.01" oninput="syncMeter(${mi})" /></div>
-        <div class="form-group"><label>Tax ₹ <span style="color:var(--text3);font-size:11px;">by usage</span></label><input type="number" id="m${mi}_tax" inputmode="decimal" placeholder="0.00" min="0" step="0.01" oninput="syncMeter(${mi})" /></div>
+        <div class="form-group"><label>Energy charge (₹)</label><input type="number" id="m${mi}_energy" inputmode="decimal" placeholder="0.00" min="0" step="0.01" oninput="syncMeter(${mi})"/></div>
+        <div class="form-group"><label>Fixed charge (₹)</label><input type="number" id="m${mi}_fixed" inputmode="decimal" placeholder="0.00" min="0" step="0.01" oninput="syncMeter(${mi})"/></div>
+        <div class="form-group"><label>Common area (₹)</label><input type="number" id="m${mi}_common" inputmode="decimal" placeholder="0.00" min="0" step="0.01" oninput="syncMeter(${mi})"/></div>
+        <div class="form-group"><label>Tax (₹) <span style="color:var(--text3);font-size:11px;font-weight:400;">by usage</span></label><input type="number" id="m${mi}_tax" inputmode="decimal" placeholder="0.00" min="0" step="0.01" oninput="syncMeter(${mi})"/></div>
       </div>
-
       <div class="total-bar">
         <span class="total-label">Computed total</span>
         <span class="total-val" id="m${mi}_computed">₹0.00</span>
       </div>
-      <div class="form-group"><label>Confirm total bill (₹)</label><input type="number" id="m${mi}_confirm" inputmode="decimal" placeholder="0.00" min="0" step="0.01" oninput="syncMeter(${mi})" /></div>
-      <div id="m${mi}_warn" class="alert" style="display:none;">Charges don't match confirmed total.</div>
-
-      ${n > 0 ? `
-      <div style="margin-top:8px;">
-        <div class="section-label">Sub-meter readings</div>
-        ${linked.map((t,ti) => `
-          <div style="margin-bottom:12px;">
-            <div style="font-size:13px;font-weight:600;margin-bottom:6px;">${t.name}</div>
-            <div class="form-row-3">
-              <div class="form-group"><label>Prev (kWh)</label><input type="number" id="m${mi}_t${ti}_prev" inputmode="decimal" placeholder="0.00" min="0" step="0.01" oninput="updateSubUsage(${mi})" /></div>
-              <div class="form-group"><label>Curr (kWh)</label><input type="number" id="m${mi}_t${ti}_curr" inputmode="decimal" placeholder="0.00" min="0" step="0.01" oninput="updateSubUsage(${mi})" /></div>
-              <div class="form-group"><label>Usage</label><div style="padding:10px 12px;background:var(--surface2);border-radius:8px;font-size:14px;font-weight:600;" id="m${mi}_t${ti}_usage">— kWh</div></div>
-            </div>
-          </div>`).join('')}
-        <div id="m${mi}_sub_warn" class="alert" style="display:none;"></div>
-      </div>` : `<div class="info-box">No tenants linked. Go to Settings → Meters to link tenants.</div>`}
+      <div class="form-group"><label>Confirm total bill (₹)</label><input type="number" id="m${mi}_confirm" inputmode="decimal" placeholder="0.00" min="0" step="0.01" oninput="syncMeter(${mi})"/></div>
+      <div class="alert" id="m${mi}_warn" style="display:none;margin-top:8px;">⚠️ Charges don't match the confirmed total bill.</div>
+      <div class="submeter-block">
+        <div class="submeter-block-label">Sub-meter readings</div>
+        ${subRows}
+        <div class="alert" id="m${mi}_sub_warn" style="display:none;margin-top:8px;"></div>
+      </div>
     </div>`;
   });
-  document.getElementById('calc-meters').innerHTML = html;
+  document.getElementById('calc-meters').innerHTML=html;
 }
 
 function onMeterChange(mi){
@@ -113,8 +238,8 @@ function onMeterChange(mi){
   const usage=Math.max(0,curr-prev);
   const line=document.getElementById(`m${mi}_usage_line`);
   if(usage>0){
-    line.style.display='block';
-    document.getElementById(`m${mi}_usage_val`).textContent=usage.toFixed(2);
+    line.style.display='flex';
+    document.getElementById(`m${mi}_usage_val`).textContent=usage.toFixed(2)+' kWh';
     document.getElementById(`m${mi}_auto_energy`).textContent=rate>0?'₹'+(rate*usage).toFixed(2):'₹—';
     if(rate>0){ const el=document.getElementById(`m${mi}_energy`); if(el&&!parseFloat(el.value)) el.value=(rate*usage).toFixed(2); }
   } else { line.style.display='none'; }
@@ -144,18 +269,20 @@ function updateSubUsage(mi){
     const p=parseFloat(document.getElementById(`m${mi}_t${ti}_prev`)?.value)||0;
     const c=parseFloat(document.getElementById(`m${mi}_t${ti}_curr`)?.value)||0;
     const u=Math.max(0,c-p);
-    const el=document.getElementById(`m${mi}_t${ti}_usage`); if(el) el.textContent=u.toFixed(2)+' kWh';
+    const chip=document.getElementById(`m${mi}_t${ti}_usage`);
+    if(chip) chip.textContent=u.toFixed(2)+' kWh';
     subTotal+=u;
   });
   const warn=document.getElementById(`m${mi}_sub_warn`);
   if(warn){
     if(mainUsage>0&&subTotal>0&&Math.abs(subTotal-mainUsage)>0.5){
       warn.style.display='block';
-      warn.textContent=`Sub-meters: ${subTotal.toFixed(2)} kWh vs main: ${mainUsage.toFixed(2)} kWh (diff: ${(mainUsage-subTotal).toFixed(2)} kWh)`;
+      warn.textContent=`⚠️ Sub-meters: ${subTotal.toFixed(2)} kWh vs main: ${mainUsage.toFixed(2)} kWh (diff: ${(mainUsage-subTotal).toFixed(2)} kWh)`;
     } else warn.style.display='none';
   }
 }
 
+// ── Calculate split ───────────────────────────────────────
 function calculateAll(){
   const period=document.getElementById('period-label').value||'Unnamed';
   const date=document.getElementById('reading-date').value;
@@ -195,12 +322,14 @@ function calculateAll(){
     meterResults.push({meterId:m.id,meterName:m.name,billData,splits});
   });
 
-  if(!meterResults.length){ alert('No meters with linked tenants found. Check Settings.'); return; }
+  if(!meterResults.length){ alert('No meters with linked tenants. Check Settings.'); return; }
   state.lastResult={period,date,meterResults};
-  renderResults(period,meterResults);
+  document.getElementById('result-content').innerHTML=buildResultsHTML(period,meterResults);
   document.getElementById('result-section').style.display='block';
   setTimeout(()=>document.getElementById('result-section').scrollIntoView({behavior:'smooth',block:'start'}),100);
 }
+
+function initials(name){ return name.split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2); }
 
 function buildMessage(split,period,meterName,bd){
   return (state.settings.msgTemplate||DEFAULT_TEMPLATE).replace(/\{(\w+)\}/g,(_,k)=>{
@@ -209,51 +338,65 @@ function buildMessage(split,period,meterName,bd){
   });
 }
 
-function renderResults(period,meterResults){
-  let html='';
-  meterResults.forEach(mr=>{
+function buildResultsHTML(period,meterResults){
+  return meterResults.map(mr=>{
     const {meterName,billData:bd,splits}=mr;
     let tTot=0;
-    const rows=splits.map(s=>{ tTot+=s.total; return `<tr><td style="font-weight:600;">${s.name}</td><td>${s.usage.toFixed(2)}</td><td>₹${s.energyAmt.toFixed(2)}</td><td>₹${(s.fixedAmt+s.commonAmt).toFixed(2)}</td><td>₹${s.taxAmt.toFixed(2)}</td><td style="font-weight:700;">₹${s.total.toFixed(2)}</td></tr>`; }).join('');
+    const rows=splits.map(s=>{ tTot+=s.total; return `<tr>
+      <td class="cell-name">${s.name}</td>
+      <td class="cell-amt">${s.usage.toFixed(2)}</td>
+      <td class="cell-amt">₹${s.energyAmt.toFixed(2)}</td>
+      <td class="cell-amt">₹${(s.fixedAmt+s.commonAmt).toFixed(2)}</td>
+      <td class="cell-amt">₹${s.taxAmt.toFixed(2)}</td>
+      <td class="cell-total">₹${s.total.toFixed(2)}</td>
+    </tr>`; }).join('');
+
     const waButtons=splits.map(s=>{
-      if(!s.phone) return `<div style="padding:8px 12px;border:1px solid var(--border2);border-radius:8px;font-size:13px;color:var(--text3);">${s.name}: no number</div>`;
+      if(!s.phone) return `<div class="wa-no-num">${s.name} — no WhatsApp number saved</div>`;
       const url=`https://wa.me/${s.phone}?text=${encodeURIComponent(buildMessage(s,period,meterName,bd))}`;
-      return `<a href="${url}" target="_blank" style="text-decoration:none;"><button class="btn btn-wa btn-sm"><svg class="wa-icon" viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>${s.name} · ₹${s.total.toFixed(2)}</button></a>`;
+      return `<a href="${url}" target="_blank" class="wa-row">
+        <div class="wa-avatar">${initials(s.name)}</div>
+        <div class="wa-info"><div class="wa-name">${s.name}</div><div class="wa-amount">₹${s.total.toFixed(2)} due</div></div>
+        <span style="font-size:20px;color:var(--wa);">→</span>
+      </a>`;
     }).join('');
 
-    html+=`<div class="card" style="margin-bottom:10px;">
-      <div class="meter-header"><span class="meter-badge">Result</span><span style="font-weight:600;">${meterName}</span></div>
-      <div class="metric-row">
+    return `<div class="card card-result">
+      <div class="meter-header">
+        <span class="badge badge-green">✓ Result</span>
+        <span class="meter-title">${meterName}</span>
+      </div>
+      <div class="metric-grid">
         <div class="metric"><div class="metric-label">Total bill</div><div class="metric-val">₹${bd.totalBill.toFixed(2)}</div></div>
-        <div class="metric"><div class="metric-label">Usage</div><div class="metric-val">${bd.mainUsage.toFixed(2)} kWh</div></div>
-        <div class="metric"><div class="metric-label">Rate</div><div class="metric-val">₹${bd.rate.toFixed(2)}</div></div>
+        <div class="metric"><div class="metric-label">Main usage</div><div class="metric-val">${bd.mainUsage.toFixed(2)} <span style="font-size:13px;font-weight:600;">kWh</span></div></div>
+        <div class="metric"><div class="metric-label">Rate per unit</div><div class="metric-val">₹${bd.rate.toFixed(2)}</div></div>
         <div class="metric"><div class="metric-label">Tenants</div><div class="metric-val">${splits.length}</div></div>
       </div>
-      <div style="overflow-x:auto;">
+      <div class="split-table-wrap">
         <table class="split-table">
           <thead><tr><th>Tenant</th><th>kWh</th><th>Energy</th><th>Fixed+Com</th><th>Tax</th><th>Total</th></tr></thead>
           <tbody>${rows}</tbody>
-          <tfoot><tr><td>Total</td><td colspan="4"></td><td style="font-weight:700;">₹${tTot.toFixed(2)}</td></tr></tfoot>
+          <tfoot><tr><td>Total</td><td colspan="4"></td><td>₹${tTot.toFixed(2)}</td></tr></tfoot>
         </table>
       </div>
-      <div style="margin-top:12px;">
-        <div class="section-label" style="margin-bottom:8px;">Send via WhatsApp</div>
-        <div style="display:flex;flex-direction:column;gap:8px;">${waButtons}</div>
+      <div class="wa-section">
+        <div class="wa-label">Send via WhatsApp</div>
+        <div class="wa-btn-list">${waButtons}</div>
       </div>
     </div>`;
-  });
-  document.getElementById('result-content').innerHTML=html;
+  }).join('');
 }
 
-function saveToHistory(){
+async function saveToHistory(){
   if(!state.lastResult){ alert('Calculate first.'); return; }
-  state.history.unshift({...state.lastResult, savedAt:new Date().toISOString()});
-  saveHistory();
+  state.history.unshift({...state.lastResult,savedAt:new Date().toISOString()});
+  await saveHistory();
   const btn=document.getElementById('save-btn');
-  btn.textContent='✓ Saved!'; btn.disabled=true;
-  setTimeout(()=>{ btn.textContent='Save to history'; btn.disabled=false; },2000);
+  btn.innerHTML='<span>✓</span> Saved & synced!'; btn.disabled=true;
+  setTimeout(()=>{ btn.innerHTML='<span>💾</span> Save to history'; btn.disabled=false; },2500);
 }
 
+// ── Auto-fill previous readings ───────────────────────────
 function applyAutofill(){
   if(!state.history.length) return;
   const last=state.history[0];
@@ -269,9 +412,8 @@ function applyAutofill(){
     onMeterChange(mi);
   });
   if(filled>0){
-    const b=document.getElementById('autofill-banner');
-    document.getElementById('autofill-text').textContent=`Previous readings filled from "${last.period}"`;
-    b.style.display='flex';
+    document.getElementById('autofill-text').textContent=`From "${last.period}" — just enter current readings`;
+    document.getElementById('autofill-banner').style.display='flex';
   }
 }
 
@@ -291,9 +433,8 @@ function clearForm(){
   state.settings.mainMeters.forEach((_,mi)=>{
     ['prev','curr','rate','energy','fixed','common','tax','confirm'].forEach(f=>{ const el=document.getElementById(`m${mi}_${f}`); if(el) el.value=''; });
     state.settings.tenants.filter(t=>state.settings.mainMeters[mi].tenantIds.includes(t.id)).forEach((_,ti)=>{
-      const ep=document.getElementById(`m${mi}_t${ti}_prev`); if(ep) ep.value='';
-      const ec=document.getElementById(`m${mi}_t${ti}_curr`); if(ec) ec.value='';
-      const eu=document.getElementById(`m${mi}_t${ti}_usage`); if(eu) eu.textContent='— kWh';
+      ['prev','curr'].forEach(f=>{ const el=document.getElementById(`m${mi}_t${ti}_${f}`); if(el) el.value=''; });
+      const chip=document.getElementById(`m${mi}_t${ti}_usage`); if(chip) chip.textContent='— kWh';
     });
     const comp=document.getElementById(`m${mi}_computed`); if(comp) comp.textContent='₹0.00';
     const ul=document.getElementById(`m${mi}_usage_line`); if(ul) ul.style.display='none';
@@ -301,35 +442,32 @@ function clearForm(){
   document.getElementById('result-section').style.display='none';
 }
 
-// ── SETTINGS ─────────────────────────────────────────────
+// ── Settings ──────────────────────────────────────────────
 function renderSettings(){
   document.getElementById('set-cycle').value=state.settings.cycle;
   document.getElementById('set-msg-template').value=state.settings.msgTemplate||DEFAULT_TEMPLATE;
   document.getElementById('set-msg-template').oninput=updateMsgPreview;
+  // Show User ID
+  const uidEl=document.getElementById('user-id-display');
+  if(uidEl) uidEl.textContent=state.userId;
   renderTenants(); renderMetersSettings(); updateMsgPreview();
 }
 
 function renderTenants(){
-  const html=state.settings.tenants.map((t,i)=>`
-    <div style="background:var(--surface2);border-radius:10px;padding:12px;margin-bottom:8px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-        <span style="font-weight:600;font-size:14px;">Tenant ${i+1}</span>
+  document.getElementById('tenant-list').innerHTML=state.settings.tenants.map((t,i)=>`
+    <div class="tenant-card">
+      <div class="tenant-card-header">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <div class="tenant-num">${i+1}</div>
+          <span style="font-size:14px;font-weight:700;">${t.name}</span>
+        </div>
         <button class="btn btn-danger btn-sm" onclick="removeTenant('${t.id}')">Remove</button>
       </div>
-      <div class="form-group"><label>Name</label><input type="text" class="t-name" data-id="${t.id}" value="${t.name}" oninput="onTenantNameInput('${t.id}', this.value)" /></div>
-      <div class="form-group" style="margin-bottom:0;"><label>WhatsApp number</label><input type="tel" class="t-phone" data-id="${t.id}" inputmode="numeric" placeholder="919876543210" value="${t.phone||''}" oninput="onTenantPhoneInput('${t.id}', this.value)" /></div>
+      <div class="form-row-2">
+        <div class="form-group" style="margin-bottom:0;"><label>Name</label><input type="text" class="t-name" data-id="${t.id}" value="${t.name}"/></div>
+        <div class="form-group" style="margin-bottom:0;"><label>WhatsApp number</label><input type="tel" class="t-phone" data-id="${t.id}" inputmode="numeric" placeholder="919876543210" value="${t.phone||''}"/></div>
+      </div>
     </div>`).join('');
-  document.getElementById('tenant-list').innerHTML=html;
-}
-
-function onTenantNameInput(tenantId, value){
-  const t = state.settings.tenants.find(x => x.id === tenantId);
-  if(t) t.name = value;
-}
-
-function onTenantPhoneInput(tenantId, value){
-  const t = state.settings.tenants.find(x => x.id === tenantId);
-  if(t) t.phone = value.trim();
 }
 
 function addTenant(){
@@ -341,6 +479,31 @@ function removeTenant(id){
   state.settings.tenants=state.settings.tenants.filter(t=>t.id!==id);
   state.settings.mainMeters.forEach(m=>{ m.tenantIds=m.tenantIds.filter(tid=>tid!==id); });
   renderTenants(); renderMetersSettings();
+}
+
+function syncMeterNamesFromDOM(){
+  document.querySelectorAll('.m-name').forEach(el=>{
+    const m=state.settings.mainMeters.find(x=>x.id===el.dataset.id);
+    if(m&&el.value.trim()) m.name=el.value.trim();
+  });
+}
+
+function renderMetersSettings(){
+  document.getElementById('meter-list').innerHTML=state.settings.mainMeters.map((m,mi)=>{
+    const chips=state.settings.tenants.map(t=>`
+      <span class="tenant-chip ${m.tenantIds.includes(t.id)?'selected':''}" onclick="toggleTenant('${m.id}','${t.id}')">${t.name}</span>`).join('');
+    return `<div class="card card-meter" style="margin-bottom:10px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+        <span class="badge badge-blue">Meter ${mi+1}</span>
+        <button class="btn btn-danger btn-sm" onclick="removeMeter('${m.id}')">Remove</button>
+      </div>
+      <div class="form-group"><label>Meter name</label><input type="text" class="m-name" data-id="${m.id}" value="${m.name}"/></div>
+      <div>
+        <label style="font-size:12px;font-weight:600;color:var(--text2);display:block;margin-bottom:6px;">Linked tenants</label>
+        <div class="chip-wrap">${chips||'<span style="font-size:13px;color:var(--text3);">Add tenants above first</span>'}</div>
+      </div>
+    </div>`;
+  }).join('');
 }
 
 function addMeter(){
@@ -356,29 +519,6 @@ function removeMeter(id){
   renderMetersSettings();
 }
 
-function renderMetersSettings(){
-  const html=state.settings.mainMeters.map((m,mi)=>{
-    const chips=state.settings.tenants.map(t=>`
-      <span class="tenant-chip ${m.tenantIds.includes(t.id)?'selected':''}" onclick="toggleTenant('${m.id}','${t.id}')">${t.name}</span>`).join('');
-    return `<div class="card card-accent" style="margin-bottom:10px;">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
-        <span class="meter-badge">Meter ${mi+1}</span>
-        <button class="btn btn-danger btn-sm" onclick="removeMeter('${m.id}')">Remove</button>
-      </div>
-      <div class="form-group"><label>Meter name</label><input type="text" class="m-name" data-id="${m.id}" value="${m.name}" oninput="onMeterNameInput('${m.id}', this.value)" /></div>
-      <div><label style="font-size:13px;color:var(--text2);display:block;margin-bottom:6px;">Linked tenants</label>
-        <div>${chips||'<span style="font-size:13px;color:var(--text3);">Add tenants above first</span>'}</div>
-      </div>
-    </div>`;
-  }).join('');
-  document.getElementById('meter-list').innerHTML=html;
-}
-
-function onMeterNameInput(meterId, value){
-  const m = state.settings.mainMeters.find(x => x.id === meterId);
-  if(m) m.name = value;
-}
-
 function toggleTenant(meterId,tenantId){
   syncMeterNamesFromDOM();
   const m=state.settings.mainMeters.find(x=>x.id===meterId); if(!m) return;
@@ -387,31 +527,16 @@ function toggleTenant(meterId,tenantId){
   renderMetersSettings();
 }
 
-function applySettings(){
-  // Billing cycle & message template
-  state.settings.cycle = document.getElementById('set-cycle').value;
-  state.settings.msgTemplate = document.getElementById('set-msg-template').value || DEFAULT_TEMPLATE;
-
-  // Read tenant names and phones from DOM before saving
-  document.querySelectorAll('.t-name').forEach(el => {
-    const t = state.settings.tenants.find(x => x.id === el.dataset.id);
-    if(t) t.name = el.value.trim() || t.name;
-  });
-  document.querySelectorAll('.t-phone').forEach(el => {
-    const t = state.settings.tenants.find(x => x.id === el.dataset.id);
-    if(t) t.phone = el.value.trim();
-  });
-
-  // Read meter names from DOM before saving
-  document.querySelectorAll('.m-name').forEach(el => {
-    const m = state.settings.mainMeters.find(x => x.id === el.dataset.id);
-    if(m) m.name = el.value.trim() || m.name;
-  });
-
-  document.getElementById('cycle-badge').textContent = state.settings.cycle === 'monthly' ? 'Monthly' : 'Bi-monthly';
-  saveSettings();
+async function applySettings(){
+  state.settings.cycle=document.getElementById('set-cycle').value;
+  state.settings.msgTemplate=document.getElementById('set-msg-template').value||DEFAULT_TEMPLATE;
+  document.querySelectorAll('.t-name').forEach(el=>{ const t=state.settings.tenants.find(x=>x.id===el.dataset.id); if(t) t.name=el.value.trim()||t.name; });
+  document.querySelectorAll('.t-phone').forEach(el=>{ const t=state.settings.tenants.find(x=>x.id===el.dataset.id); if(t) t.phone=el.value.trim(); });
+  document.querySelectorAll('.m-name').forEach(el=>{ const m=state.settings.mainMeters.find(x=>x.id===el.dataset.id); if(m) m.name=el.value.trim()||m.name; });
+  document.getElementById('cycle-badge').textContent=state.settings.cycle==='monthly'?'Monthly':'Bi-monthly';
+  await saveSettings();
   renderCalcSections();
-  alert('Settings saved!');
+  alert('✓ Settings saved & synced!');
 }
 
 function updateMsgPreview(){
@@ -425,19 +550,25 @@ function updateMsgPreview(){
   const el=document.getElementById('msg-preview'); if(el) el.textContent=preview;
 }
 
-// ── HISTORY ──────────────────────────────────────────────
+// ── History ───────────────────────────────────────────────
 function renderHistory(){
   const el=document.getElementById('history-list');
-  if(!state.history.length){ el.innerHTML='<div class="empty">No records yet.<br>Calculate and save a bill to see it here.</div>'; return; }
+  document.getElementById('history-detail').style.display='none';
+  if(!state.history.length){
+    el.innerHTML=`<div class="empty"><div class="empty-icon">📋</div><div class="empty-title">No records yet</div><div class="empty-sub">Calculate and save a bill to see it here</div></div>`;
+    return;
+  }
   el.innerHTML=state.history.map((rec,idx)=>{
-    const d=rec.savedAt?new Date(rec.savedAt).toLocaleDateString('en-IN'):'—';
+    const d=rec.savedAt?new Date(rec.savedAt).toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'}):'—';
     const totalBill=(rec.meterResults||[]).reduce((s,mr)=>s+parseFloat(mr.billData.totalBill||0),0);
+    const meters=(rec.meterResults||[]).length;
     return `<div class="history-item">
-      <div>
-        <div style="font-weight:600;font-size:15px;">${rec.period} ${idx===0?'<span class="badge badge-success">latest</span>':''}</div>
-        <div style="font-size:13px;color:var(--text3);">${(rec.meterResults||[]).length} meters · ₹${totalBill.toFixed(2)} · ${d}</div>
+      <div class="history-icon">⚡</div>
+      <div class="history-info">
+        <div class="history-period">${rec.period}${idx===0?' <span class="badge badge-green" style="margin-left:4px;">latest</span>':''}</div>
+        <div class="history-meta">${meters} meter${meters!==1?'s':''} · ₹${totalBill.toFixed(2)} · ${d}</div>
       </div>
-      <div style="display:flex;gap:6px;">
+      <div class="history-actions">
         <button class="btn btn-sm" onclick="viewRecord(${idx})">View</button>
         <button class="btn btn-danger btn-sm" onclick="deleteRecord(${idx})">✕</button>
       </div>
@@ -447,44 +578,27 @@ function renderHistory(){
 
 function viewRecord(idx){
   const rec=state.history[idx];
-  let html=`<div style="font-size:17px;font-weight:700;margin-bottom:14px;">${rec.period}</div>`;
-  (rec.meterResults||[]).forEach(mr=>{
-    const rows=mr.splits.map(s=>`<tr><td style="font-weight:600;">${s.name}</td><td>${parseFloat(s.usage).toFixed(2)}</td><td>₹${parseFloat(s.energyAmt).toFixed(2)}</td><td>₹${(parseFloat(s.fixedAmt)+parseFloat(s.commonAmt)).toFixed(2)}</td><td>₹${parseFloat(s.taxAmt).toFixed(2)}</td><td style="font-weight:700;">₹${parseFloat(s.total).toFixed(2)}</td></tr>`).join('');
-    const waButtons=mr.splits.filter(s=>s.phone).map(s=>{
-      const url=`https://wa.me/${s.phone}?text=${encodeURIComponent(buildMessage(s,rec.period,mr.meterName,mr.billData))}`;
-      return `<a href="${url}" target="_blank" style="text-decoration:none;"><button class="btn btn-wa btn-sm">${s.name} ↗</button></a>`;
-    }).join('');
-    html+=`<div class="card" style="margin-bottom:10px;">
-      <div class="meter-header"><span class="meter-badge">Meter</span><span style="font-weight:600;">${mr.meterName}</span></div>
-      <div class="metric-row">
-        <div class="metric"><div class="metric-label">Bill</div><div class="metric-val">₹${parseFloat(mr.billData.totalBill).toFixed(2)}</div></div>
-        <div class="metric"><div class="metric-label">Usage</div><div class="metric-val">${parseFloat(mr.billData.mainUsage).toFixed(2)} kWh</div></div>
-      </div>
-      <div style="overflow-x:auto;"><table class="split-table"><thead><tr><th>Tenant</th><th>kWh</th><th>Energy</th><th>Fixed</th><th>Tax</th><th>Total</th></tr></thead><tbody>${rows}</tbody></table></div>
-      ${waButtons?`<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;">${waButtons}</div>`:''}
-    </div>`;
-  });
-  document.getElementById('history-detail').innerHTML=html;
-  document.getElementById('history-detail').style.display='block';
-  document.getElementById('history-detail').scrollIntoView({behavior:'smooth',block:'start'});
+  const det=document.getElementById('history-detail');
+  det.innerHTML=`<div style="margin-bottom:6px;font-size:17px;font-weight:800;">${rec.period}</div>${buildResultsHTML(rec.period,rec.meterResults||[])}`;
+  det.style.display='block';
+  det.scrollIntoView({behavior:'smooth',block:'start'});
 }
 
-function deleteRecord(idx){
+async function deleteRecord(idx){
   if(!confirm('Delete this record?')) return;
-  state.history.splice(idx,1); saveHistory(); renderHistory();
+  state.history.splice(idx,1); await saveHistory(); renderHistory();
   document.getElementById('history-detail').style.display='none';
 }
 
-function clearHistory(){
+async function clearHistory(){
   if(!confirm('Clear all history? This cannot be undone.')) return;
-  state.history=[]; saveHistory(); renderHistory();
-  document.getElementById('history-detail').style.display='none';
+  state.history=[]; await saveHistory(); renderHistory();
 }
 
-// ── EXCEL EXPORT ──────────────────────────────────────────
+// ── Excel export ──────────────────────────────────────────
 function exportExcel(){
   if(!state.history.length){ alert('No history to export yet.'); return; }
-  if(typeof XLSX==='undefined'){ alert('Excel library not loaded yet. Try again in a moment.'); return; }
+  if(typeof XLSX==='undefined'){ alert('Excel library loading, try again.'); return; }
   const wb=XLSX.utils.book_new();
   const sumData=[['EB Bill History — Summary'],[], ['Period','Meter','Usage (kWh)','Rate (₹)','Energy (₹)','Fixed (₹)','Common (₹)','Tax (₹)','Total (₹)','Tenants']];
   state.history.forEach(rec=>{
@@ -495,10 +609,10 @@ function exportExcel(){
   const ws1=XLSX.utils.aoa_to_sheet(sumData);
   ws1['!cols']=[14,20,14,10,12,12,12,10,12,8].map(w=>({wch:w}));
   XLSX.utils.book_append_sheet(wb,ws1,'Summary');
-  const detData=[['Detailed Splits'],[], ['Period','Meter','Tenant','Prev','Curr','kWh','Energy (₹)','Fixed (₹)','Common (₹)','Tax (₹)','Total (₹)']];
+  const detData=[['Detailed Splits'],[], ['Period','Meter','Tenant','Prev','Curr','kWh','Energy','Fixed','Common','Tax','Total']];
   state.history.forEach(rec=>{
     (rec.meterResults||[]).forEach(mr=>{
-      mr.splits.forEach(s=>{ detData.push([rec.period,mr.meterName,s.name,parseFloat(s.prev||0),parseFloat(s.curr||0),parseFloat(s.usage||0),parseFloat(s.energyAmt||0),parseFloat(s.fixedAmt||0),parseFloat(s.commonAmt||0),parseFloat(s.taxAmt||0),parseFloat(s.total||0)]); });
+      mr.splits.forEach(s=>detData.push([rec.period,mr.meterName,s.name,parseFloat(s.prev||0),parseFloat(s.curr||0),parseFloat(s.usage||0),parseFloat(s.energyAmt||0),parseFloat(s.fixedAmt||0),parseFloat(s.commonAmt||0),parseFloat(s.taxAmt||0),parseFloat(s.total||0)]));
       detData.push([]);
     });
   });
@@ -509,7 +623,7 @@ function exportExcel(){
     (rec.meterResults||[]).forEach(mr=>{
       const sn=(rec.period+' '+mr.meterName).replace(/[\/\\?\*\[\]:]/g,'-').substring(0,31);
       const bd=mr.billData;
-      const d=[['Period: '+rec.period,'Meter: '+mr.meterName],[],['Main Prev',parseFloat(bd.mainPrev||0),'Rate',parseFloat(bd.rate||0)],['Main Curr',parseFloat(bd.mainCurr||0),'Energy (₹)',parseFloat(bd.totalEnergy||0)],['Usage (kWh)',parseFloat(bd.mainUsage||0),'Fixed (₹)',parseFloat(bd.fixedAmt||0)],['','','Common (₹)',parseFloat(bd.commonAmt||0)],['','','Tax (₹)',parseFloat(bd.taxAmt||0)],['','','Total Bill (₹)',parseFloat(bd.totalBill||0)],[],['Tenant','Prev','Curr','kWh','Energy','Fixed','Common','Tax','Total']];
+      const d=[['Period: '+rec.period,'Meter: '+mr.meterName],[],['Main Prev',parseFloat(bd.mainPrev||0),'Rate',parseFloat(bd.rate||0)],['Main Curr',parseFloat(bd.mainCurr||0),'Energy (₹)',parseFloat(bd.totalEnergy||0)],['Usage (kWh)',parseFloat(bd.mainUsage||0),'Fixed (₹)',parseFloat(bd.fixedAmt||0)],['','','Common (₹)',parseFloat(bd.commonAmt||0)],['','','Tax (₹)',parseFloat(bd.taxAmt||0)],['','','Total (₹)',parseFloat(bd.totalBill||0)],[],['Tenant','Prev','Curr','kWh','Energy','Fixed','Common','Tax','Total']];
       mr.splits.forEach(s=>d.push([s.name,parseFloat(s.prev||0),parseFloat(s.curr||0),parseFloat(s.usage||0),parseFloat(s.energyAmt||0),parseFloat(s.fixedAmt||0),parseFloat(s.commonAmt||0),parseFloat(s.taxAmt||0),parseFloat(s.total||0)]));
       const sr=11,er=sr+mr.splits.length-1;
       d.push(['TOTAL',`=SUM(B${sr}:B${er})`,`=SUM(C${sr}:C${er})`,`=SUM(D${sr}:D${er})`,`=SUM(E${sr}:E${er})`,`=SUM(F${sr}:F${er})`,`=SUM(G${sr}:G${er})`,`=SUM(H${sr}:H${er})`,`=SUM(I${sr}:I${er})`]);
@@ -526,24 +640,29 @@ function exportJSON(){
   const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='eb-bill-backup.json'; a.click();
 }
 
-// ── INIT ──────────────────────────────────────────────────
-window.addEventListener('DOMContentLoaded',()=>{
-  loadState();
+// ── Init ──────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', async ()=>{
+  // Get/create user ID
+  state.userId = getOrCreateUserId();
+
+  // Init Firebase
+  const firebaseOk = initFirebase();
+
+  // Load state (cloud if available, local otherwise)
+  await cloudLoadState();
+
+  // Boot UI
   document.getElementById('reading-date').value=new Date().toISOString().split('T')[0];
   document.getElementById('cycle-badge').textContent=state.settings.cycle==='monthly'?'Monthly':'Bi-monthly';
   renderCalcSections();
-  setTimeout(applyAutofill, 100);
+  setTimeout(applyAutofill,100);
 
-  // Register service worker
-  if('serviceWorker' in navigator){
-    navigator.serviceWorker.register('/sw.js').catch(()=>{});
+  // Show connection status
+  const statusEl = document.getElementById('sync-status');
+  if(statusEl){
+    statusEl.textContent = firebaseOk ? '☁️ Cloud sync on' : '📱 Offline mode';
+    statusEl.style.color = firebaseOk ? 'var(--green-txt)' : 'var(--text3)';
   }
-});
 
-// Patch: sync meter names from DOM before any re-render
-function syncMeterNamesFromDOM(){
-  document.querySelectorAll('.m-name').forEach(el => {
-    const m = state.settings.mainMeters.find(x => x.id === el.dataset.id);
-    if(m && el.value.trim()) m.name = el.value.trim();
-  });
-}
+  if('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(()=>{});
+});
